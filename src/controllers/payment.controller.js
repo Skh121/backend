@@ -1,9 +1,9 @@
-import Order from '../models/Order.js';
-import { createPaymentIntent } from '../services/payment.service.js';
-import { verifyWebhookSignature } from '../services/payment.service.js';
-import { completeOrder } from './order.controller.js';
-import { HTTP_STATUS, ERROR_MESSAGES } from '../utils/constants.js';
-import { logger } from '../utils/logger.js';
+import Order from "../models/Order.js";
+import { createPaymentIntent } from "../services/payment.service.js";
+import { verifyWebhookSignature } from "../services/payment.service.js";
+import { completeOrder } from "./order.controller.js";
+import { HTTP_STATUS, ERROR_MESSAGES } from "../utils/constants.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * Create payment intent for order
@@ -32,27 +32,23 @@ export const createIntent = async (req, res, next) => {
     }
 
     // Check if order is already paid
-    if (order.paymentStatus === 'succeeded') {
+    if (order.paymentStatus === "succeeded") {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: 'Order is already paid',
+        message: "Order is already paid",
       });
     }
 
     // Create payment intent
-    const paymentIntent = await createPaymentIntent(
-      order.totalPrice,
-      'usd',
-      {
-        orderId: order._id.toString(),
-        userId: req.user.id,
-        orderNumber: order.orderNumber,
-      }
-    );
+    const paymentIntent = await createPaymentIntent(order.totalPrice, "usd", {
+      orderId: order._id.toString(),
+      userId: req.user.id,
+      orderNumber: order.orderNumber,
+    });
 
     // Update order with payment intent ID
     order.stripePaymentIntentId = paymentIntent.id;
-    order.paymentStatus = 'processing';
+    order.paymentStatus = "processing";
     await order.save();
 
     res.json({
@@ -72,25 +68,25 @@ export const createIntent = async (req, res, next) => {
  * POST /api/payment/webhook
  */
 export const handleWebhook = async (req, res) => {
-  const signature = req.headers['stripe-signature'];
+  const signature = req.headers["stripe-signature"];
 
   try {
     // Verify webhook signature
     const event = verifyWebhookSignature(req.body, signature);
 
-    logger.info('Stripe webhook received:', { type: event.type });
+    logger.info("Stripe webhook received:", { type: event.type });
 
     // Handle different event types
     switch (event.type) {
-      case 'payment_intent.succeeded':
+      case "payment_intent.succeeded":
         await handlePaymentSuccess(event.data.object);
         break;
 
-      case 'payment_intent.payment_failed':
+      case "payment_intent.payment_failed":
         await handlePaymentFailed(event.data.object);
         break;
 
-      case 'payment_intent.canceled':
+      case "payment_intent.canceled":
         await handlePaymentCanceled(event.data.object);
         break;
 
@@ -100,10 +96,10 @@ export const handleWebhook = async (req, res) => {
 
     res.json({ received: true });
   } catch (error) {
-    logger.error('Webhook error:', error);
+    logger.error("Webhook error:", error);
     return res.status(HTTP_STATUS.BAD_REQUEST).json({
       success: false,
-      message: 'Webhook error',
+      message: "Webhook error",
     });
   }
 };
@@ -116,7 +112,7 @@ const handlePaymentSuccess = async (paymentIntent) => {
     const orderId = paymentIntent.metadata.orderId;
 
     if (!orderId) {
-      logger.error('No orderId in payment intent metadata');
+      logger.error("No orderId in payment intent metadata");
       return;
     }
 
@@ -127,7 +123,7 @@ const handlePaymentSuccess = async (paymentIntent) => {
       logger.info(`Payment succeeded for order ${order.orderNumber}`);
     }
   } catch (error) {
-    logger.error('Error handling payment success:', error);
+    logger.error("Error handling payment success:", error);
   }
 };
 
@@ -139,20 +135,20 @@ const handlePaymentFailed = async (paymentIntent) => {
     const orderId = paymentIntent.metadata.orderId;
 
     if (!orderId) {
-      logger.error('No orderId in payment intent metadata');
+      logger.error("No orderId in payment intent metadata");
       return;
     }
 
     const order = await Order.findById(orderId);
 
     if (order) {
-      order.paymentStatus = 'failed';
+      order.paymentStatus = "failed";
       await order.save();
 
       logger.warn(`Payment failed for order ${order.orderNumber}`);
     }
   } catch (error) {
-    logger.error('Error handling payment failure:', error);
+    logger.error("Error handling payment failure:", error);
   }
 };
 
@@ -164,25 +160,101 @@ const handlePaymentCanceled = async (paymentIntent) => {
     const orderId = paymentIntent.metadata.orderId;
 
     if (!orderId) {
-      logger.error('No orderId in payment intent metadata');
+      logger.error("No orderId in payment intent metadata");
       return;
     }
 
     const order = await Order.findById(orderId);
 
     if (order) {
-      order.paymentStatus = 'cancelled';
-      order.status = 'cancelled';
+      order.paymentStatus = "cancelled";
+      order.status = "cancelled";
       await order.save();
 
       logger.info(`Payment cancelled for order ${order.orderNumber}`);
     }
   } catch (error) {
-    logger.error('Error handling payment cancellation:', error);
+    logger.error("Error handling payment cancellation:", error);
+  }
+};
+
+/**
+ * Manually confirm payment and complete order
+ * POST /api/payment/confirm-payment
+ * This is a fallback for development when webhooks don't work on localhost
+ */
+export const confirmPayment = async (req, res, next) => {
+  try {
+    const { orderId } = req.body;
+
+    // Find order
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.ORDER_NOT_FOUND,
+      });
+    }
+
+    // Ensure user owns the order
+    if (order.user.toString() !== req.user.id) {
+      return res.status(HTTP_STATUS.FORBIDDEN).json({
+        success: false,
+        message: ERROR_MESSAGES.FORBIDDEN,
+      });
+    }
+
+    // Check if order already completed
+    if (order.paymentStatus === "succeeded") {
+      return res.json({
+        success: true,
+        message: "Payment already confirmed",
+        data: { order },
+      });
+    }
+
+    // Verify payment intent status with Stripe
+    if (!order.stripePaymentIntentId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "No payment intent found for this order",
+      });
+    }
+
+    const { retrievePaymentIntent } =
+      await import("../services/payment.service.js");
+    const paymentIntent = await retrievePaymentIntent(
+      order.stripePaymentIntentId,
+    );
+
+    // Check if payment actually succeeded
+    if (paymentIntent.status !== "succeeded") {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: `Payment status is ${paymentIntent.status}`,
+      });
+    }
+
+    // Complete the order
+    const completedOrder = await completeOrder(orderId, paymentIntent.id);
+
+    logger.info(
+      `Payment manually confirmed for order ${completedOrder.orderNumber}`,
+    );
+
+    res.json({
+      success: true,
+      message: "Payment confirmed and order completed",
+      data: { order: completedOrder },
+    });
+  } catch (error) {
+    next(error);
   }
 };
 
 export default {
   createIntent,
   handleWebhook,
+  confirmPayment,
 };

@@ -1,10 +1,15 @@
-import mongoose from 'mongoose';
-import { ORDER_STATUS, PAYMENT_STATUS } from '../utils/constants.js';
+import mongoose from "mongoose";
+import { ORDER_STATUS, PAYMENT_STATUS } from "../utils/constants.js";
+import {
+  encryptField,
+  decryptField,
+  isEncrypted,
+} from "../utils/encryption.js";
 
 const orderItemSchema = new mongoose.Schema({
   product: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Product',
+    ref: "Product",
     required: true,
   },
   name: {
@@ -31,27 +36,22 @@ const shippingAddressSchema = new mongoose.Schema({
   street: {
     type: String,
     required: true,
-    maxlength: 200,
   },
   city: {
     type: String,
     required: true,
-    maxlength: 100,
   },
   state: {
     type: String,
     required: true,
-    maxlength: 100,
   },
   zipCode: {
     type: String,
     required: true,
-    maxlength: 20,
   },
   country: {
     type: String,
     required: true,
-    maxlength: 100,
   },
 });
 
@@ -59,13 +59,12 @@ const orderSchema = new mongoose.Schema(
   {
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
     },
     orderNumber: {
       type: String,
       unique: true,
-      required: true,
     },
     items: [orderItemSchema],
     shippingAddress: {
@@ -157,7 +156,7 @@ const orderSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Indexes for better query performance (orderNumber index auto-created by unique: true)
@@ -167,18 +166,74 @@ orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ stripePaymentIntentId: 1 });
 
 // Generate unique order number
-orderSchema.pre('save', async function (next) {
+orderSchema.pre("save", async function () {
   if (!this.orderNumber) {
     const timestamp = Date.now().toString(36).toUpperCase();
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
     this.orderNumber = `ORD-${timestamp}-${random}`;
   }
-  next();
+
+  // Validate and encrypt phone if modified and not already encrypted
+  if (this.isModified("phone") && this.phone && !isEncrypted(this.phone)) {
+    if (this.phone.length > 20) {
+      throw new Error("Phone number cannot exceed 20 characters");
+    }
+    this.phone = encryptField(this.phone);
+  }
+
+  // Validate and encrypt shipping address fields if modified
+  if (this.isModified("shippingAddress") && this.shippingAddress) {
+    if (
+      this.shippingAddress.street &&
+      !isEncrypted(this.shippingAddress.street)
+    ) {
+      if (this.shippingAddress.street.length > 200) {
+        throw new Error("Street address cannot exceed 200 characters");
+      }
+      this.shippingAddress.street = encryptField(this.shippingAddress.street);
+    }
+    if (this.shippingAddress.city && !isEncrypted(this.shippingAddress.city)) {
+      if (this.shippingAddress.city.length > 100) {
+        throw new Error("City cannot exceed 100 characters");
+      }
+      this.shippingAddress.city = encryptField(this.shippingAddress.city);
+    }
+    if (
+      this.shippingAddress.state &&
+      !isEncrypted(this.shippingAddress.state)
+    ) {
+      if (this.shippingAddress.state.length > 100) {
+        throw new Error("State cannot exceed 100 characters");
+      }
+      this.shippingAddress.state = encryptField(this.shippingAddress.state);
+    }
+    if (
+      this.shippingAddress.zipCode &&
+      !isEncrypted(this.shippingAddress.zipCode)
+    ) {
+      if (this.shippingAddress.zipCode.length > 20) {
+        throw new Error("Zip code cannot exceed 20 characters");
+      }
+      this.shippingAddress.zipCode = encryptField(this.shippingAddress.zipCode);
+    }
+    if (
+      this.shippingAddress.country &&
+      !isEncrypted(this.shippingAddress.country)
+    ) {
+      if (this.shippingAddress.country.length > 100) {
+        throw new Error("Country cannot exceed 100 characters");
+      }
+      this.shippingAddress.country = encryptField(this.shippingAddress.country);
+    }
+  }
 });
 
 // Calculate pricing
 orderSchema.methods.calculatePricing = function () {
-  this.itemsPrice = this.items.reduce((total, item) => total + item.price * item.quantity, 0);
+  this.itemsPrice = this.items.reduce(
+    (total, item) => total + item.price * item.quantity,
+    0,
+  );
   this.taxPrice = this.itemsPrice * 0.1; // 10% tax
   this.shippingPrice = this.itemsPrice > 100 ? 0 : 10; // Free shipping over $100
   this.totalPrice = this.itemsPrice + this.taxPrice + this.shippingPrice;
@@ -216,6 +271,63 @@ orderSchema.methods.cancelOrder = async function (reason) {
   await this.save();
 };
 
-const Order = mongoose.model('Order', orderSchema);
+// Helper function to decrypt order PII fields
+const decryptOrderFields = (doc) => {
+  if (!doc) return;
+
+  try {
+    // Decrypt phone
+    if (doc.phone && isEncrypted(doc.phone)) {
+      doc.phone = decryptField(doc.phone);
+    }
+
+    // Decrypt shipping address
+    if (doc.shippingAddress) {
+      if (
+        doc.shippingAddress.street &&
+        isEncrypted(doc.shippingAddress.street)
+      ) {
+        doc.shippingAddress.street = decryptField(doc.shippingAddress.street);
+      }
+      if (doc.shippingAddress.city && isEncrypted(doc.shippingAddress.city)) {
+        doc.shippingAddress.city = decryptField(doc.shippingAddress.city);
+      }
+      if (doc.shippingAddress.state && isEncrypted(doc.shippingAddress.state)) {
+        doc.shippingAddress.state = decryptField(doc.shippingAddress.state);
+      }
+      if (
+        doc.shippingAddress.zipCode &&
+        isEncrypted(doc.shippingAddress.zipCode)
+      ) {
+        doc.shippingAddress.zipCode = decryptField(doc.shippingAddress.zipCode);
+      }
+      if (
+        doc.shippingAddress.country &&
+        isEncrypted(doc.shippingAddress.country)
+      ) {
+        doc.shippingAddress.country = decryptField(doc.shippingAddress.country);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to decrypt order fields:", error.message);
+  }
+};
+
+// Middleware to decrypt fields after finding
+orderSchema.post("find", function (docs) {
+  if (Array.isArray(docs)) {
+    docs.forEach(decryptOrderFields);
+  }
+});
+
+orderSchema.post("findOne", function (doc) {
+  decryptOrderFields(doc);
+});
+
+orderSchema.post("findOneAndUpdate", function (doc) {
+  decryptOrderFields(doc);
+});
+
+const Order = mongoose.model("Order", orderSchema);
 
 export default Order;

@@ -1,11 +1,27 @@
-import User from '../models/User.js';
-import LoginAttempt from '../models/LoginAttempt.js';
-import { hashPassword, comparePassword, generateRandomToken, generateOTP } from '../utils/encryption.js';
-import { generateTokenPair, verifyRefreshToken } from '../services/token.service.js';
-import { sendVerificationEmail, send2FACode, sendPasswordResetEmail } from '../services/email.service.js';
-import { logAuthEvent, logFailedLogin } from '../services/audit.service.js';
-import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constants.js';
-import { securityConfig } from '../config/security.js';
+import User from "../models/User.js";
+import LoginAttempt from "../models/LoginAttempt.js";
+import {
+  hashPassword,
+  comparePassword,
+  generateRandomToken,
+  generateOTP,
+} from "../utils/encryption.js";
+import {
+  generateTokenPair,
+  verifyRefreshToken,
+} from "../services/token.service.js";
+import {
+  sendVerificationEmail,
+  send2FACode,
+  sendPasswordResetEmail,
+} from "../services/email.service.js";
+import { logAuthEvent, logFailedLogin } from "../services/audit.service.js";
+import {
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+} from "../utils/constants.js";
+import { securityConfig } from "../config/security.js";
 
 /**
  * Register new user
@@ -39,21 +55,25 @@ export const register = async (req, res, next) => {
       lastName,
       emailVerificationToken: verificationPIN,
       emailVerificationExpires: verificationExpires,
+      passwordChangedAt: new Date(),
+      passwordExpiresAt: new Date(
+        Date.now() + securityConfig.password.expiryDays * 24 * 60 * 60 * 1000,
+      ),
     });
 
     // Send verification PIN via email
     await sendVerificationEmail(email, verificationPIN);
 
     // Log event
-    logAuthEvent('register', req, user, true);
+    logAuthEvent("register", req, user, true);
 
     res.status(HTTP_STATUS.CREATED).json({
       success: true,
-      message: 'Registration successful. Please check your email for a 6-digit verification PIN.',
+      message:
+        "Registration successful. Please check your email for a 6-digit verification PIN.",
       data: {
         userId: user._id,
         email: user.email,
-        message: process.env.NODE_ENV === 'development' ? `Development Mode: Your PIN is ${verificationPIN}` : undefined,
       },
     });
   } catch (error) {
@@ -72,7 +92,7 @@ export const verifyEmail = async (req, res, next) => {
     if (!email || !pin) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: 'Email and PIN are required',
+        message: "Email and PIN are required",
       });
     }
 
@@ -80,12 +100,12 @@ export const verifyEmail = async (req, res, next) => {
       email,
       emailVerificationToken: pin,
       emailVerificationExpires: { $gt: Date.now() },
-    }).select('+emailVerificationToken +emailVerificationExpires +password');
+    }).select("+emailVerificationToken +emailVerificationExpires +password");
 
     if (!user) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: 'Invalid or expired PIN',
+        message: "Invalid or expired PIN",
       });
     }
 
@@ -94,35 +114,38 @@ export const verifyEmail = async (req, res, next) => {
     user.emailVerificationExpires = undefined;
     await user.save();
 
-    logAuthEvent('email_verified', req, user, true);
+    logAuthEvent("email_verified", req, user, true);
 
     // Generate tokens and log the user in automatically
     const tokens = await generateTokenPair(user);
 
     // Set tokens in HTTP-only cookies
-    res.cookie('accessToken', tokens.accessToken, {
+    res.cookie("accessToken", tokens.accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
       maxAge: 15 * 60 * 1000, // 15 minutes
     });
 
-    res.cookie('refreshToken', tokens.refreshToken, {
+    res.cookie("refreshToken", tokens.refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     res.json({
       success: true,
-      message: 'Email verified successfully! You are now logged in.',
+      message: "Email verified successfully! You are now logged in.",
       data: {
         user: {
           id: user._id,
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
+          phone: user.phone,
+          profileImage: user.profileImage,
+          createdAt: user.createdAt,
           role: user.role,
         },
       },
@@ -141,19 +164,21 @@ export const login = async (req, res, next) => {
     const { email, password } = req.body;
 
     // Find user with password field
-    const user = await User.findOne({ email }).select('+password +refreshTokenHash');
+    const user = await User.findOne({ email }).select(
+      "+password +refreshTokenHash",
+    );
 
     // Check if user exists
     if (!user) {
       await LoginAttempt.create({
         email,
         ip: req.ip,
-        userAgent: req.headers['user-agent'],
+        userAgent: req.headers["user-agent"],
         success: false,
-        failureReason: 'invalid_credentials',
+        failureReason: "invalid_credentials",
       });
 
-      logFailedLogin(email, req, 'invalid_credentials');
+      logFailedLogin(email, req, "invalid_credentials");
 
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
         success: false,
@@ -166,17 +191,17 @@ export const login = async (req, res, next) => {
       await LoginAttempt.create({
         email,
         ip: req.ip,
-        userAgent: req.headers['user-agent'],
+        userAgent: req.headers["user-agent"],
         success: false,
-        failureReason: 'account_suspended',
+        failureReason: "account_suspended",
         userId: user._id,
       });
 
-      logFailedLogin(email, req, 'account_suspended');
+      logFailedLogin(email, req, "account_suspended");
 
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
-        message: 'Your account has been suspended',
+        message: "Your account has been suspended",
       });
     }
 
@@ -185,13 +210,13 @@ export const login = async (req, res, next) => {
       await LoginAttempt.create({
         email,
         ip: req.ip,
-        userAgent: req.headers['user-agent'],
+        userAgent: req.headers["user-agent"],
         success: false,
-        failureReason: 'account_locked',
+        failureReason: "account_locked",
         userId: user._id,
       });
 
-      logFailedLogin(email, req, 'account_locked');
+      logFailedLogin(email, req, "account_locked");
 
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
         success: false,
@@ -204,13 +229,13 @@ export const login = async (req, res, next) => {
       await LoginAttempt.create({
         email,
         ip: req.ip,
-        userAgent: req.headers['user-agent'],
+        userAgent: req.headers["user-agent"],
         success: false,
-        failureReason: 'email_not_verified',
+        failureReason: "email_not_verified",
         userId: user._id,
       });
 
-      logFailedLogin(email, req, 'email_not_verified');
+      logFailedLogin(email, req, "email_not_verified");
 
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
@@ -227,13 +252,13 @@ export const login = async (req, res, next) => {
       await LoginAttempt.create({
         email,
         ip: req.ip,
-        userAgent: req.headers['user-agent'],
+        userAgent: req.headers["user-agent"],
         success: false,
-        failureReason: 'invalid_credentials',
+        failureReason: "invalid_credentials",
         userId: user._id,
       });
 
-      logFailedLogin(email, req, 'invalid_password');
+      logFailedLogin(email, req, "invalid_password");
 
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
         success: false,
@@ -244,23 +269,33 @@ export const login = async (req, res, next) => {
     // Reset failed login attempts
     await user.resetLoginAttempts();
 
-    // Check if 2FA is enabled
-    if (user.twoFactorEnabled) {
-      // Generate and send 2FA code
-      const twoFactorCode = generateOTP(securityConfig.twoFactor.codeLength);
-      user.twoFactorCode = twoFactorCode;
-      user.twoFactorCodeExpires = new Date(Date.now() + securityConfig.twoFactor.codeExpiry);
-      user.twoFactorVerified = false;
-      await user.save();
-
-      await send2FACode(email, twoFactorCode);
-
+    // Check if TOTP (authenticator app) is enabled
+    if (user.totpEnabled) {
       return res.json({
         success: true,
-        message: '2FA code sent to your email',
-        requires2FA: true,
+        message: "Please enter your authenticator code",
+        requiresTOTP: true,
+        email: user.email,
       });
     }
+
+    // Email-based 2FA has been disabled - using TOTP only
+    // if (user.twoFactorEnabled) {
+    //   // Generate and send 2FA code
+    //   const twoFactorCode = generateOTP(securityConfig.twoFactor.codeLength);
+    //   user.twoFactorCode = twoFactorCode;
+    //   user.twoFactorCodeExpires = new Date(Date.now() + securityConfig.twoFactor.codeExpiry);
+    //   user.twoFactorVerified = false;
+    //   await user.save();
+
+    //   await send2FACode(email, twoFactorCode);
+
+    //   return res.json({
+    //     success: true,
+    //     message: '2FA code sent to your email',
+    //     requires2FA: true,
+    //   });
+    // }
 
     // Generate tokens
     const { accessToken, refreshToken } = generateTokenPair(user);
@@ -275,20 +310,20 @@ export const login = async (req, res, next) => {
     await LoginAttempt.create({
       email,
       ip: req.ip,
-      userAgent: req.headers['user-agent'],
+      userAgent: req.headers["user-agent"],
       success: true,
       userId: user._id,
     });
 
-    logAuthEvent('login', req, user, true);
+    logAuthEvent("login", req, user, true);
 
     // Set cookies
-    res.cookie('accessToken', accessToken, {
+    res.cookie("accessToken", accessToken, {
       ...securityConfig.cookie,
       maxAge: 15 * 60 * 1000, // 15 minutes
     });
 
-    res.cookie('refreshToken', refreshToken, securityConfig.cookie);
+    res.cookie("refreshToken", refreshToken, securityConfig.cookie);
 
     res.json({
       success: true,
@@ -299,6 +334,9 @@ export const login = async (req, res, next) => {
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
+          phone: user.phone,
+          profileImage: user.profileImage,
+          createdAt: user.createdAt,
           role: user.role,
         },
         accessToken,
@@ -317,7 +355,9 @@ export const verify2FA = async (req, res, next) => {
   try {
     const { email, code } = req.body;
 
-    const user = await User.findOne({ email }).select('+twoFactorCode +twoFactorCodeExpires +refreshTokenHash');
+    const user = await User.findOne({ email }).select(
+      "+twoFactorCode +twoFactorCodeExpires +refreshTokenHash",
+    );
 
     if (!user) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
@@ -335,17 +375,17 @@ export const verify2FA = async (req, res, next) => {
       await LoginAttempt.create({
         email,
         ip: req.ip,
-        userAgent: req.headers['user-agent'],
+        userAgent: req.headers["user-agent"],
         success: false,
-        failureReason: 'invalid_2fa_code',
+        failureReason: "invalid_2fa_code",
         userId: user._id,
       });
 
-      logFailedLogin(email, req, 'invalid_2fa_code');
+      logFailedLogin(email, req, "invalid_2fa_code");
 
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
         success: false,
-        message: 'Invalid or expired 2FA code',
+        message: "Invalid or expired 2FA code",
       });
     }
 
@@ -367,20 +407,20 @@ export const verify2FA = async (req, res, next) => {
     await LoginAttempt.create({
       email,
       ip: req.ip,
-      userAgent: req.headers['user-agent'],
+      userAgent: req.headers["user-agent"],
       success: true,
       userId: user._id,
     });
 
-    logAuthEvent('login_2fa', req, user, true);
+    logAuthEvent("login_2fa", req, user, true);
 
     // Set cookies
-    res.cookie('accessToken', accessToken, {
+    res.cookie("accessToken", accessToken, {
       ...securityConfig.cookie,
       maxAge: 15 * 60 * 1000,
     });
 
-    res.cookie('refreshToken', refreshToken, securityConfig.cookie);
+    res.cookie("refreshToken", refreshToken, securityConfig.cookie);
 
     res.json({
       success: true,
@@ -391,6 +431,9 @@ export const verify2FA = async (req, res, next) => {
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
+          phone: user.phone,
+          profileImage: user.profileImage,
+          createdAt: user.createdAt,
           role: user.role,
         },
         accessToken,
@@ -420,9 +463,15 @@ export const refreshAccessToken = async (req, res, next) => {
     const decoded = verifyRefreshToken(refreshToken);
 
     // Find user and validate refresh token
-    const user = await User.findById(decoded.id).select('+refreshTokenHash +refreshTokenExpires');
+    const user = await User.findById(decoded.id).select(
+      "+refreshTokenHash +refreshTokenExpires",
+    );
 
-    if (!user || !user.refreshTokenHash || user.refreshTokenExpires < Date.now()) {
+    if (
+      !user ||
+      !user.refreshTokenHash ||
+      user.refreshTokenExpires < Date.now()
+    ) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
         success: false,
         message: ERROR_MESSAGES.INVALID_TOKEN,
@@ -430,7 +479,10 @@ export const refreshAccessToken = async (req, res, next) => {
     }
 
     // Verify refresh token hash
-    const isTokenValid = await comparePassword(refreshToken, user.refreshTokenHash);
+    const isTokenValid = await comparePassword(
+      refreshToken,
+      user.refreshTokenHash,
+    );
 
     if (!isTokenValid) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
@@ -440,7 +492,8 @@ export const refreshAccessToken = async (req, res, next) => {
     }
 
     // Generate new token pair (refresh token rotation)
-    const { accessToken, refreshToken: newRefreshToken } = generateTokenPair(user);
+    const { accessToken, refreshToken: newRefreshToken } =
+      generateTokenPair(user);
 
     // Update refresh token hash
     user.refreshTokenHash = await hashPassword(newRefreshToken);
@@ -448,16 +501,16 @@ export const refreshAccessToken = async (req, res, next) => {
     await user.save();
 
     // Set new cookies
-    res.cookie('accessToken', accessToken, {
+    res.cookie("accessToken", accessToken, {
       ...securityConfig.cookie,
       maxAge: 15 * 60 * 1000,
     });
 
-    res.cookie('refreshToken', newRefreshToken, securityConfig.cookie);
+    res.cookie("refreshToken", newRefreshToken, securityConfig.cookie);
 
     res.json({
       success: true,
-      message: 'Token refreshed successfully',
+      message: "Token refreshed successfully",
       data: {
         accessToken,
       },
@@ -479,12 +532,12 @@ export const logout = async (req, res, next) => {
         $unset: { refreshTokenHash: 1, refreshTokenExpires: 1 },
       });
 
-      logAuthEvent('logout', req, req.user, true);
+      logAuthEvent("logout", req, req.user, true);
     }
 
     // Clear cookies
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
+    res.clearCookie("accessToken");
+    res.clearCookie("refreshToken");
 
     res.json({
       success: true,
@@ -516,13 +569,15 @@ export const forgotPassword = async (req, res, next) => {
     // Generate reset token
     const resetToken = generateRandomToken(32);
     user.passwordResetToken = resetToken;
-    user.passwordResetExpires = new Date(Date.now() + securityConfig.passwordReset.tokenExpiry);
+    user.passwordResetExpires = new Date(
+      Date.now() + securityConfig.passwordReset.tokenExpiry,
+    );
     await user.save();
 
     // Send reset email
     await sendPasswordResetEmail(email, resetToken);
 
-    logAuthEvent('password_reset_requested', req, user, true);
+    logAuthEvent("password_reset_requested", req, user, true);
 
     res.json({
       success: true,
@@ -544,13 +599,29 @@ export const resetPassword = async (req, res, next) => {
     const user = await User.findOne({
       passwordResetToken: token,
       passwordResetExpires: { $gt: Date.now() },
-    }).select('+passwordResetToken +passwordResetExpires');
+    }).select(
+      "+passwordResetToken +passwordResetExpires +password +passwordHistory",
+    );
 
     if (!user) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: 'Invalid or expired reset token',
+        message: "Invalid or expired reset token",
       });
+    }
+
+    // Check if password is in history
+    const isPasswordReused = await user.isPasswordInHistory(password);
+    if (isPasswordReused) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: `Cannot reuse your last ${securityConfig.password.historyLimit} passwords`,
+      });
+    }
+
+    // Add current password to history before changing
+    if (user.password) {
+      await user.addToPasswordHistory(user.password);
     }
 
     // Hash new password
@@ -558,13 +629,19 @@ export const resetPassword = async (req, res, next) => {
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
 
+    // Update password change timestamp and expiry
+    user.passwordChangedAt = new Date();
+    user.passwordExpiresAt = new Date(
+      Date.now() + securityConfig.password.expiryDays * 24 * 60 * 60 * 1000,
+    );
+
     // Invalidate all refresh tokens
     user.refreshTokenHash = undefined;
     user.refreshTokenExpires = undefined;
 
     await user.save();
 
-    logAuthEvent('password_reset', req, user, true);
+    logAuthEvent("password_reset", req, user, true);
 
     res.json({
       success: true,

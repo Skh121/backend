@@ -1,6 +1,10 @@
-import Cart from '../models/Cart.js';
-import Product from '../models/Product.js';
-import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constants.js';
+import Cart from "../models/Cart.js";
+import Product from "../models/Product.js";
+import {
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+} from "../utils/constants.js";
 
 /**
  * Get user's cart
@@ -8,7 +12,9 @@ import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constant
  */
 export const getCart = async (req, res, next) => {
   try {
-    let cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
+    let cart = await Cart.findOne({ user: req.user.id }).populate(
+      "items.product",
+    );
 
     if (!cart) {
       // Create empty cart if doesn't exist
@@ -61,7 +67,7 @@ export const addToCart = async (req, res, next) => {
     await cart.addItem(product, quantity);
 
     // Populate and return updated cart
-    cart = await Cart.findById(cart._id).populate('items.product');
+    cart = await Cart.findById(cart._id).populate("items.product");
 
     res.json({
       success: true,
@@ -113,7 +119,7 @@ export const updateCartItem = async (req, res, next) => {
     await cart.updateItemQuantity(productId, quantity);
 
     // Populate and return updated cart
-    const updatedCart = await Cart.findById(cart._id).populate('items.product');
+    const updatedCart = await Cart.findById(cart._id).populate("items.product");
 
     res.json({
       success: true,
@@ -145,7 +151,7 @@ export const removeFromCart = async (req, res, next) => {
     await cart.removeItem(productId);
 
     // Populate and return updated cart
-    const updatedCart = await Cart.findById(cart._id).populate('items.product');
+    const updatedCart = await Cart.findById(cart._id).populate("items.product");
 
     res.json({
       success: true,
@@ -176,7 +182,7 @@ export const clearCart = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'Cart cleared successfully',
+      message: "Cart cleared successfully",
       data: { cart },
     });
   } catch (error) {

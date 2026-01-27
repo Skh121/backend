@@ -1,17 +1,13 @@
-import rateLimit from 'express-rate-limit';
-import RedisStore from 'rate-limit-redis';
-import { getRedisClient } from '../config/redis.js';
-import { securityConfig } from '../config/security.js';
-import { HTTP_STATUS } from '../utils/constants.js';
-import { logger } from '../utils/logger.js';
+import rateLimit from "express-rate-limit";
+import { securityConfig } from "../config/security.js";
+import { HTTP_STATUS } from "../utils/constants.js";
+import { logger } from "../utils/logger.js";
 
 /**
- * Create rate limiter with Redis store if available, otherwise use memory store
+ * Create rate limiter with memory store
  */
 const createRateLimiter = (options) => {
-  const redisClient = getRedisClient();
-
-  const limiterOptions = {
+  return rateLimit({
     ...options,
     standardHeaders: true,
     legacyHeaders: false,
@@ -22,21 +18,7 @@ const createRateLimiter = (options) => {
         message: options.message || securityConfig.rateLimit.global.message,
       });
     },
-  };
-
-  // Use Redis store if available for distributed rate limiting
-  if (redisClient && redisClient.isOpen) {
-    limiterOptions.store = new RedisStore({
-      // @ts-expect-error - Known issue with the options
-      client: redisClient,
-      prefix: 'rl:',
-    });
-    logger.info('Rate limiter using Redis store');
-  } else {
-    logger.warn('Rate limiter using memory store (not suitable for production)');
-  }
-
-  return rateLimit(limiterOptions);
+  });
 };
 
 /**
@@ -48,7 +30,28 @@ export const globalRateLimiter = createRateLimiter({
   message: securityConfig.rateLimit.global.message,
   skip: (req) => {
     // Skip rate limiting for health check endpoints
-    return req.path === '/health' || req.path === '/api/health';
+    if (req.path === "/health" || req.path === "/api/health") return true;
+
+    // Skip for localhost in development to prevent blocks during rapid reloads/testing
+    if (
+      process.env.NODE_ENV === "development" &&
+      (req.ip === "::1" || req.ip === "127.0.0.1")
+    ) {
+      return true;
+    }
+
+    // Always allow session maintenance routes to bypass global limit
+    // (they have their own specific limits in security.js)
+    const bypassRoutes = [
+      "/api/auth/refresh",
+      "/api/auth/logout",
+      "/api/csrf-token",
+    ];
+    if (bypassRoutes.some((route) => req.path.includes(route))) {
+      return true;
+    }
+
+    return false;
   },
 });
 
@@ -69,5 +72,5 @@ export const authRateLimiter = createRateLimiter({
 export const apiRateLimiter = createRateLimiter({
   windowMs: securityConfig.rateLimit.api.windowMs,
   max: securityConfig.rateLimit.api.max,
-  message: 'Too many API requests from this IP, please try again later.',
+  message: "Too many API requests from this IP, please try again later.",
 });

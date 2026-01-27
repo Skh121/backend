@@ -1,5 +1,5 @@
-import nodemailer from 'nodemailer';
-import { logger } from '../utils/logger.js';
+import nodemailer from "nodemailer";
+import { logger } from "../utils/logger.js";
 
 let transporter = null;
 
@@ -10,17 +10,17 @@ const initializeTransporter = () => {
   try {
     transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
-      port: parseInt(process.env.EMAIL_PORT || '587'),
-      secure: process.env.EMAIL_SECURE === 'true',
+      port: parseInt(process.env.EMAIL_PORT || "587"),
+      secure: process.env.EMAIL_SECURE === "true",
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD,
       },
     });
 
-    logger.info('Email transporter initialized');
+    logger.info("Email transporter initialized");
   } catch (error) {
-    logger.error('Error initializing email transporter:', error);
+    logger.error("Error initializing email transporter:", error);
   }
 };
 
@@ -36,17 +36,14 @@ export const sendEmail = async ({ to, subject, html, text }) => {
     }
 
     if (!transporter) {
-      logger.warn('Email transporter not configured');
-      // In development, log email instead of sending
-      if (process.env.NODE_ENV === 'development') {
-        logger.info(`Email (Development Mode):\nTo: ${to}\nSubject: ${subject}\nContent: ${text || html}`);
-        return true;
-      }
+      logger.error(
+        "Email transporter not configured - Check EMAIL_USER and EMAIL_PASSWORD in .env",
+      );
       return false;
     }
 
     const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME || 'Shopping Platform'}" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
+      from: `"${process.env.EMAIL_FROM_NAME || "Shopping Platform"}" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
       to,
       subject,
       html,
@@ -54,10 +51,22 @@ export const sendEmail = async ({ to, subject, html, text }) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    logger.info(`Email sent: ${info.messageId}`);
+    logger.info(
+      `✅ Email sent successfully to ${to} - Message ID: ${info.messageId}`,
+    );
     return true;
   } catch (error) {
-    logger.error('Error sending email:', error);
+    logger.error("❌ Error sending email:", error.message);
+
+    // Log helpful error messages
+    if (error.code === "EAUTH") {
+      logger.error(
+        "Authentication failed - Check EMAIL_USER and EMAIL_PASSWORD",
+      );
+    } else if (error.code === "ESOCKET") {
+      logger.error("Connection failed - Check EMAIL_HOST and EMAIL_PORT");
+    }
+
     return false;
   }
 };
@@ -100,7 +109,7 @@ export const sendVerificationEmail = async (email, pin) => {
 
   return sendEmail({
     to: email,
-    subject: 'Verify Your Email Address',
+    subject: "Verify Your Email Address",
     html,
     text,
   });
@@ -137,7 +146,7 @@ export const send2FACode = async (email, code) => {
 
   return sendEmail({
     to: email,
-    subject: 'Your 2FA Verification Code',
+    subject: "Your 2FA Verification Code",
     html,
     text,
   });
@@ -179,10 +188,15 @@ export const sendPasswordResetEmail = async (email, token) => {
 
   return sendEmail({
     to: email,
-    subject: 'Reset Your Password',
+    subject: "Reset Your Password",
     html,
     text,
   });
 };
 
-export default { sendEmail, sendVerificationEmail, send2FACode, sendPasswordResetEmail };
+export default {
+  sendEmail,
+  sendVerificationEmail,
+  send2FACode,
+  sendPasswordResetEmail,
+};

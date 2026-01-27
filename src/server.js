@@ -10,7 +10,6 @@ const __dirname = path.dirname(__filename);
 
 // Import configurations
 import connectDatabase from "./config/database.js";
-import { connectRedis } from "./config/redis.js";
 import { initializeStripe } from "./config/stripe.js";
 import { securityConfig } from "./config/security.js";
 
@@ -140,9 +139,6 @@ const startServer = async () => {
   try {
     // Connect to MongoDB
     await connectDatabase();
-
-    // Connect to Redis (optional for development)
-    await connectRedis();
 
     // Initialize Stripe (optional for development)
     initializeStripe();

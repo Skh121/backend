@@ -1,16 +1,16 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const cartItemSchema = new mongoose.Schema(
   {
     product: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Product',
+      ref: "Product",
       required: true,
     },
     quantity: {
       type: Number,
       required: true,
-      min: [1, 'Quantity must be at least 1'],
+      min: [1, "Quantity must be at least 1"],
       default: 1,
     },
     price: {
@@ -21,14 +21,14 @@ const cartItemSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 const cartSchema = new mongoose.Schema(
   {
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       unique: true,
     },
@@ -44,22 +44,27 @@ const cartSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index for faster queries (user index auto-created by unique: true)
 
 // Calculate totals before saving
-cartSchema.pre('save', function (next) {
-  this.totalItems = this.items.reduce((total, item) => total + item.quantity, 0);
-  this.totalPrice = this.items.reduce((total, item) => total + item.price * item.quantity, 0);
-  next();
+cartSchema.pre("save", async function () {
+  this.totalItems = this.items.reduce(
+    (total, item) => total + item.quantity,
+    0,
+  );
+  this.totalPrice = this.items.reduce(
+    (total, item) => total + item.price * item.quantity,
+    0,
+  );
 });
 
 // Method to add item to cart
 cartSchema.methods.addItem = async function (product, quantity) {
   const existingItemIndex = this.items.findIndex(
-    (item) => item.product.toString() === product._id.toString()
+    (item) => item.product.toString() === product._id.toString(),
   );
 
   if (existingItemIndex >= 0) {
@@ -80,14 +85,18 @@ cartSchema.methods.addItem = async function (product, quantity) {
 
 // Method to update item quantity
 cartSchema.methods.updateItemQuantity = async function (productId, quantity) {
-  const item = this.items.find((item) => item.product.toString() === productId.toString());
+  const item = this.items.find(
+    (item) => item.product.toString() === productId.toString(),
+  );
 
   if (!item) {
-    throw new Error('Item not found in cart');
+    throw new Error("Item not found in cart");
   }
 
   if (quantity === 0) {
-    this.items = this.items.filter((item) => item.product.toString() !== productId.toString());
+    this.items = this.items.filter(
+      (item) => item.product.toString() !== productId.toString(),
+    );
   } else {
     item.quantity = quantity;
   }
@@ -97,7 +106,9 @@ cartSchema.methods.updateItemQuantity = async function (productId, quantity) {
 
 // Method to remove item from cart
 cartSchema.methods.removeItem = async function (productId) {
-  this.items = this.items.filter((item) => item.product.toString() !== productId.toString());
+  this.items = this.items.filter(
+    (item) => item.product.toString() !== productId.toString(),
+  );
   await this.save();
 };
 
@@ -107,6 +118,6 @@ cartSchema.methods.clearCart = async function () {
   await this.save();
 };
 
-const Cart = mongoose.model('Cart', cartSchema);
+const Cart = mongoose.model("Cart", cartSchema);
 
 export default Cart;

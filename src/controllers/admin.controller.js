@@ -1,8 +1,18 @@
-import User from '../models/User.js';
-import Product from '../models/Product.js';
-import Order from '../models/Order.js';
-import { logAdminAction } from '../services/audit.service.js';
-import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constants.js';
+import User from "../models/User.js";
+import Product from "../models/Product.js";
+import Order from "../models/Order.js";
+import { logAdminAction } from "../services/audit.service.js";
+import {
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+} from "../utils/constants.js";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ==================== PRODUCT MANAGEMENT ====================
 
@@ -12,20 +22,42 @@ import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constant
  */
 export const createProduct = async (req, res, next) => {
   try {
-    const { name, description, price, stock, category, images, featured } = req.body;
+    const { name, description, price, stock, category, images, featured } =
+      req.body;
+
+    // Handle uploaded files
+    let productImages = [];
+    if (req.files && req.files.length > 0) {
+      productImages = req.files.map((file) => file.path);
+    } else if (images) {
+      // Support both array and comma-separated string
+      productImages = Array.isArray(images)
+        ? images
+        : images
+            .split(",")
+            .map((img) => img.trim())
+            .filter(Boolean);
+    }
+
+    if (productImages.length === 0) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "At least one product image is required",
+      });
+    }
 
     const product = await Product.create({
       name,
       description,
-      price,
-      stock,
+      price: parseFloat(price),
+      stock: parseInt(stock),
       category,
-      images,
-      featured: featured || false,
+      images: productImages,
+      featured: featured === "true" || featured === true || false,
       createdBy: req.user.id,
     });
 
-    logAdminAction('create_product', req, product);
+    logAdminAction("create_product", req, product);
 
     res.status(HTTP_STATUS.CREATED).json({
       success: true,
@@ -55,21 +87,64 @@ export const updateProduct = async (req, res, next) => {
     const oldData = { ...product.toObject() };
 
     // Update fields
-    const { name, description, price, stock, category, images, featured, isActive } = req.body;
+    const {
+      name,
+      description,
+      price,
+      stock,
+      category,
+      images,
+      featured,
+      isActive,
+      keepExistingImages,
+    } = req.body;
 
     if (name !== undefined) product.name = name;
     if (description !== undefined) product.description = description;
-    if (price !== undefined) product.price = price;
-    if (stock !== undefined) product.stock = stock;
+    if (price !== undefined) product.price = parseFloat(price);
+    if (stock !== undefined) product.stock = parseInt(stock);
     if (category !== undefined) product.category = category;
-    if (images !== undefined) product.images = images;
-    if (featured !== undefined) product.featured = featured;
-    if (isActive !== undefined) product.isActive = isActive;
+    if (featured !== undefined)
+      product.featured = featured === "true" || featured === true;
+    if (isActive !== undefined)
+      product.isActive = isActive === "true" || isActive === true;
+
+    // Handle images
+    let newImages = [];
+    if (req.files && req.files.length > 0) {
+      newImages = req.files.map((file) => file.path);
+    }
+
+    // Parse existing images to keep
+    let existingImages = [];
+    if (keepExistingImages) {
+      try {
+        existingImages = JSON.parse(keepExistingImages);
+      } catch {
+        existingImages = [];
+      }
+    }
+
+    // Combine existing and new images
+    if (newImages.length > 0 || existingImages.length > 0) {
+      product.images = [...existingImages, ...newImages];
+    } else if (images !== undefined) {
+      // Support both array and comma-separated string from URL inputs
+      product.images = Array.isArray(images)
+        ? images
+        : images
+            .split(",")
+            .map((img) => img.trim())
+            .filter(Boolean);
+    }
 
     product.updatedBy = req.user.id;
     await product.save();
 
-    logAdminAction('update_product', req, product, { oldData, newData: product.toObject() });
+    logAdminAction("update_product", req, product, {
+      oldData,
+      newData: product.toObject(),
+    });
 
     res.json({
       success: true,
@@ -96,7 +171,7 @@ export const deleteProduct = async (req, res, next) => {
       });
     }
 
-    logAdminAction('delete_product', req, product);
+    logAdminAction("delete_product", req, product);
 
     await product.deleteOne();
 
@@ -121,15 +196,16 @@ export const getAllProducts = async (req, res, next) => {
 
     const query = {};
     if (req.query.category) query.category = req.query.category;
-    if (req.query.isActive !== undefined) query.isActive = req.query.isActive === 'true';
+    if (req.query.isActive !== undefined)
+      query.isActive = req.query.isActive === "true";
 
     const [products, total] = await Promise.all([
       Product.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('createdBy', 'email firstName lastName')
-        .populate('updatedBy', 'email firstName lastName'),
+        .populate("createdBy", "email firstName lastName")
+        .populate("updatedBy", "email firstName lastName"),
       Product.countDocuments(query),
     ]);
 
@@ -170,9 +246,9 @@ export const getAllUsers = async (req, res, next) => {
 
     if (req.query.search) {
       query.$or = [
-        { email: { $regex: req.query.search, $options: 'i' } },
-        { firstName: { $regex: req.query.search, $options: 'i' } },
-        { lastName: { $regex: req.query.search, $options: 'i' } },
+        { email: { $regex: req.query.search, $options: "i" } },
+        { firstName: { $regex: req.query.search, $options: "i" } },
+        { lastName: { $regex: req.query.search, $options: "i" } },
       ];
     }
 
@@ -181,7 +257,9 @@ export const getAllUsers = async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select('-password -refreshTokenHash -emailVerificationToken -passwordResetToken -twoFactorCode'),
+        .select(
+          "-password -refreshTokenHash -emailVerificationToken -passwordResetToken -twoFactorCode",
+        ),
       User.countDocuments(query),
     ]);
 
@@ -209,7 +287,7 @@ export const getAllUsers = async (req, res, next) => {
 export const getUserById = async (req, res, next) => {
   try {
     const user = await User.findById(req.params.id).select(
-      '-password -refreshTokenHash -emailVerificationToken -passwordResetToken -twoFactorCode'
+      "-password -refreshTokenHash -emailVerificationToken -passwordResetToken -twoFactorCode",
     );
 
     if (!user) {
@@ -249,11 +327,11 @@ export const updateUserRole = async (req, res, next) => {
     user.role = role;
     await user.save();
 
-    logAdminAction('update_user_role', req, user, { oldRole, newRole: role });
+    logAdminAction("update_user_role", req, user, { oldRole, newRole: role });
 
     res.json({
       success: true,
-      message: 'User role updated successfully',
+      message: "User role updated successfully",
       data: { user },
     });
   } catch (error) {
@@ -282,11 +360,11 @@ export const suspendUser = async (req, res, next) => {
     user.suspensionReason = reason;
     await user.save();
 
-    logAdminAction('suspend_user', req, user, { reason });
+    logAdminAction("suspend_user", req, user, { reason });
 
     res.json({
       success: true,
-      message: 'User suspended successfully',
+      message: "User suspended successfully",
       data: { user },
     });
   } catch (error) {
@@ -313,11 +391,11 @@ export const unsuspendUser = async (req, res, next) => {
     user.suspensionReason = null;
     await user.save();
 
-    logAdminAction('unsuspend_user', req, user);
+    logAdminAction("unsuspend_user", req, user);
 
     res.json({
       success: true,
-      message: 'User unsuspended successfully',
+      message: "User unsuspended successfully",
       data: { user },
     });
   } catch (error) {
@@ -344,17 +422,17 @@ export const deleteUser = async (req, res, next) => {
     if (user._id.toString() === req.user.id) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: 'Cannot delete your own account',
+        message: "Cannot delete your own account",
       });
     }
 
-    logAdminAction('delete_user', req, user);
+    logAdminAction("delete_user", req, user);
 
     await user.deleteOne();
 
     res.json({
       success: true,
-      message: 'User deleted successfully',
+      message: "User deleted successfully",
     });
   } catch (error) {
     next(error);
@@ -383,8 +461,8 @@ export const getAllOrders = async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('user', 'email firstName lastName')
-        .populate('items.product', 'name images'),
+        .populate("user", "email firstName lastName")
+        .populate("items.product", "name images"),
       Order.countDocuments(query),
     ]);
 
@@ -426,17 +504,20 @@ export const updateOrderStatus = async (req, res, next) => {
     order.status = status;
 
     // Update shipping/delivery timestamps
-    if (status === 'shipped' && !order.shippedAt) {
+    if (status === "shipped" && !order.shippedAt) {
       order.shippedAt = new Date();
     }
 
-    if (status === 'delivered' && !order.deliveredAt) {
+    if (status === "delivered" && !order.deliveredAt) {
       order.deliveredAt = new Date();
     }
 
     await order.save();
 
-    logAdminAction('update_order_status', req, order, { oldStatus, newStatus: status });
+    logAdminAction("update_order_status", req, order, {
+      oldStatus,
+      newStatus: status,
+    });
 
     res.json({
       success: true,
@@ -462,19 +543,21 @@ export const getDashboardStats = async (req, res, next) => {
       totalRevenue,
       recentOrders,
     ] = await Promise.all([
-      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: "user" }),
       Product.countDocuments({ isActive: true }),
       Order.countDocuments(),
-      Order.countDocuments({ status: { $in: ['pending', 'paid', 'processing'] } }),
+      Order.countDocuments({
+        status: { $in: ["pending", "paid", "processing"] },
+      }),
       Order.aggregate([
-        { $match: { paymentStatus: 'succeeded' } },
-        { $group: { _id: null, total: { $sum: '$totalPrice' } } },
+        { $match: { paymentStatus: "succeeded" } },
+        { $group: { _id: null, total: { $sum: "$totalPrice" } } },
       ]),
       Order.find()
         .sort({ createdAt: -1 })
         .limit(10)
-        .populate('user', 'email firstName lastName')
-        .populate('items.product', 'name'),
+        .populate("user", "email firstName lastName")
+        .populate("items.product", "name"),
     ]);
 
     res.json({

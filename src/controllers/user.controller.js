@@ -1,7 +1,12 @@
-import User from '../models/User.js';
-import Order from '../models/Order.js';
-import { hashPassword, comparePassword } from '../utils/encryption.js';
-import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constants.js';
+import User from "../models/User.js";
+import Order from "../models/Order.js";
+import { hashPassword, comparePassword } from "../utils/encryption.js";
+import {
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+} from "../utils/constants.js";
+import { securityConfig } from "../config/security.js";
 
 /**
  * Get user profile
@@ -62,6 +67,71 @@ export const updateProfile = async (req, res, next) => {
 };
 
 /**
+ * Upload profile image
+ * POST /api/users/profile/image
+ */
+export const uploadProfileImage = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "No image file provided",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
+      });
+    }
+
+    // Store the image path (Cloudinary URL)
+    user.profileImage = req.file.path;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: "Profile image uploaded successfully",
+      data: { user },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete profile image
+ * DELETE /api/users/profile/image
+ */
+export const deleteProfileImage = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
+      });
+    }
+
+    // Clear the profile image
+    user.profileImage = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: "Profile image removed successfully",
+      data: { user },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Change password
  * POST /api/users/change-password
  */
@@ -69,7 +139,9 @@ export const changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
-    const user = await User.findById(req.user.id).select('+password');
+    const user = await User.findById(req.user.id).select(
+      "+password +passwordHistory",
+    );
 
     if (!user) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -79,17 +151,40 @@ export const changePassword = async (req, res, next) => {
     }
 
     // Verify current password
-    const isPasswordValid = await comparePassword(currentPassword, user.password);
+    const isPasswordValid = await comparePassword(
+      currentPassword,
+      user.password,
+    );
 
     if (!isPasswordValid) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
         success: false,
-        message: 'Current password is incorrect',
+        message: "Current password is incorrect",
       });
+    }
+
+    // Check if new password is in history
+    const isPasswordReused = await user.isPasswordInHistory(newPassword);
+    if (isPasswordReused) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: `Cannot reuse your last ${securityConfig.password.historyLimit} passwords`,
+      });
+    }
+
+    // Add current password to history before changing
+    if (user.password) {
+      await user.addToPasswordHistory(user.password);
     }
 
     // Hash and update new password
     user.password = await hashPassword(newPassword);
+
+    // Update password change timestamp and expiry
+    user.passwordChangedAt = new Date();
+    user.passwordExpiresAt = new Date(
+      Date.now() + securityConfig.password.expiryDays * 24 * 60 * 60 * 1000,
+    );
 
     // Invalidate all refresh tokens
     user.refreshTokenHash = undefined;
@@ -97,9 +192,15 @@ export const changePassword = async (req, res, next) => {
 
     await user.save();
 
+    const daysUntilExpiry = user.getDaysUntilPasswordExpiry();
+
     res.json({
       success: true,
-      message: 'Password changed successfully',
+      message: "Password changed successfully",
+      data: {
+        passwordExpiresIn: daysUntilExpiry,
+        passwordExpiryDate: user.passwordExpiresAt,
+      },
     });
   } catch (error) {
     next(error);
@@ -107,60 +208,60 @@ export const changePassword = async (req, res, next) => {
 };
 
 /**
- * Enable 2FA
+ * Enable 2FA - DISABLED (Using TOTP-based MFA instead)
  * POST /api/users/enable-2fa
  */
-export const enable2FA = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user.id);
+// export const enable2FA = async (req, res, next) => {
+//   try {
+//     const user = await User.findById(req.user.id);
 
-    if (!user) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND,
-      });
-    }
+//     if (!user) {
+//       return res.status(HTTP_STATUS.NOT_FOUND).json({
+//         success: false,
+//         message: ERROR_MESSAGES.USER_NOT_FOUND,
+//       });
+//     }
 
-    user.twoFactorEnabled = true;
-    await user.save();
+//     user.twoFactorEnabled = true;
+//     await user.save();
 
-    res.json({
-      success: true,
-      message: '2FA enabled successfully',
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+//     res.json({
+//       success: true,
+//       message: '2FA enabled successfully',
+//     });
+//   } catch (error) {
+//     next(error);
+//   }
+// };
 
 /**
- * Disable 2FA
+ * Disable 2FA - DISABLED (Using TOTP-based MFA instead)
  * POST /api/users/disable-2fa
  */
-export const disable2FA = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user.id);
+// export const disable2FA = async (req, res, next) => {
+//   try {
+//     const user = await User.findById(req.user.id);
 
-    if (!user) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND,
-      });
-    }
+//     if (!user) {
+//       return res.status(HTTP_STATUS.NOT_FOUND).json({
+//         success: false,
+//         message: ERROR_MESSAGES.USER_NOT_FOUND,
+//       });
+//     }
 
-    user.twoFactorEnabled = false;
-    user.twoFactorCode = undefined;
-    user.twoFactorCodeExpires = undefined;
-    await user.save();
+//     user.twoFactorEnabled = false;
+//     user.twoFactorCode = undefined;
+//     user.twoFactorCodeExpires = undefined;
+//     await user.save();
 
-    res.json({
-      success: true,
-      message: '2FA disabled successfully',
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+//     res.json({
+//       success: true,
+//       message: '2FA disabled successfully',
+//     });
+//   } catch (error) {
+//     next(error);
+//   }
+// };
 
 /**
  * Get user's order history
@@ -183,7 +284,7 @@ export const getUserOrders = async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('items.product', 'name images'),
+        .populate("items.product", "name images"),
       Order.countDocuments(query),
     ]);
 
@@ -208,7 +309,5 @@ export default {
   getProfile,
   updateProfile,
   changePassword,
-  enable2FA,
-  disable2FA,
   getUserOrders,
 };

@@ -1,18 +1,24 @@
 import User from "../models/User.js";
-import Order from "../models/Order.js";
-import { hashPassword, comparePassword } from "../utils/encryption.js";
+import {
+  generateTOTPSecret,
+  generateQRCode,
+  verifyTOTPToken,
+  generateBackupCodes,
+  hashBackupCode,
+  verifyBackupCode,
+} from "../services/totp.service.js";
 import {
   HTTP_STATUS,
   ERROR_MESSAGES,
   SUCCESS_MESSAGES,
 } from "../utils/constants.js";
-import { securityConfig } from "../config/security.js";
+import { logAuthEvent } from "../services/audit.service.js";
 
 /**
- * Get user profile
- * GET /api/users/profile
+ * Step 1: Generate TOTP secret and QR code
+ * POST /api/totp/setup
  */
-export const getProfile = async (req, res, next) => {
+export const setupTOTP = async (req, res, next) => {
   try {
     const user = await User.findById(req.user.id);
 
@@ -23,183 +29,25 @@ export const getProfile = async (req, res, next) => {
       });
     }
 
-    res.json({
-      success: true,
-      data: { user },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+    // Generate TOTP secret
+    const { secret, otpauthUrl } = generateTOTPSecret(user.email);
 
-/**
- * Update user profile
- * PUT /api/users/profile
- */
-export const updateProfile = async (req, res, next) => {
-  try {
-    const { firstName, lastName, phone } = req.body;
+    // Generate QR code
+    const qrCodeDataUrl = await generateQRCode(otpauthUrl);
 
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND,
-      });
-    }
-
-    // Update fields
-    if (firstName) user.firstName = firstName;
-    if (lastName) user.lastName = lastName;
-    if (phone !== undefined) user.phone = phone;
-
+    // Save secret temporarily (not verified yet)
+    user.totpSecret = secret;
+    user.totpVerified = false;
     await user.save();
 
     res.json({
       success: true,
-      message: SUCCESS_MESSAGES.PROFILE_UPDATED,
-      data: { user },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Upload profile image
- * POST /api/users/profile/image
- */
-export const uploadProfileImage = async (req, res, next) => {
-  try {
-    if (!req.file) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({
-        success: false,
-        message: "No image file provided",
-      });
-    }
-
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND,
-      });
-    }
-
-    // Store the image path (Cloudinary URL)
-    user.profileImage = req.file.path;
-    await user.save();
-
-    res.json({
-      success: true,
-      message: "Profile image uploaded successfully",
-      data: { user },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Delete profile image
- * DELETE /api/users/profile/image
- */
-export const deleteProfileImage = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND,
-      });
-    }
-
-    // Clear the profile image
-    user.profileImage = null;
-    await user.save();
-
-    res.json({
-      success: true,
-      message: "Profile image removed successfully",
-      data: { user },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Change password
- * POST /api/users/change-password
- */
-export const changePassword = async (req, res, next) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-
-    const user = await User.findById(req.user.id).select(
-      "+password +passwordHistory",
-    );
-
-    if (!user) {
-      return res.status(HTTP_STATUS.NOT_FOUND).json({
-        success: false,
-        message: ERROR_MESSAGES.USER_NOT_FOUND,
-      });
-    }
-
-    // Verify current password
-    const isPasswordValid = await comparePassword(
-      currentPassword,
-      user.password,
-    );
-
-    if (!isPasswordValid) {
-      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-        success: false,
-        message: "Current password is incorrect",
-      });
-    }
-
-    // Check if new password is in history
-    const isPasswordReused = await user.isPasswordInHistory(newPassword);
-    if (isPasswordReused) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({
-        success: false,
-        message: `Cannot reuse your last ${securityConfig.password.historyLimit} passwords`,
-      });
-    }
-
-    // Add current password to history before changing
-    if (user.password) {
-      await user.addToPasswordHistory(user.password);
-    }
-
-    // Hash and update new password
-    user.password = await hashPassword(newPassword);
-
-    // Update password change timestamp and expiry
-    user.passwordChangedAt = new Date();
-    user.passwordExpiresAt = new Date(
-      Date.now() + securityConfig.password.expiryDays * 24 * 60 * 60 * 1000,
-    );
-
-    // Invalidate all refresh tokens
-    user.refreshTokenHash = undefined;
-    user.refreshTokenExpires = undefined;
-
-    await user.save();
-
-    const daysUntilExpiry = user.getDaysUntilPasswordExpiry();
-
-    res.json({
-      success: true,
-      message: "Password changed successfully",
+      message:
+        "TOTP secret generated. Scan the QR code with your authenticator app.",
       data: {
-        passwordExpiresIn: daysUntilExpiry,
-        passwordExpiryDate: user.passwordExpiresAt,
+        secret,
+        qrCode: qrCodeDataUrl,
+        manualEntry: secret, // For manual entry if QR scan fails
       },
     });
   } catch (error) {
@@ -208,96 +56,339 @@ export const changePassword = async (req, res, next) => {
 };
 
 /**
- * Enable 2FA - DISABLED (Using TOTP-based MFA instead)
- * POST /api/users/enable-2fa
+ * Step 2: Verify TOTP token and enable TOTP
+ * POST /api/totp/verify
  */
-// export const enable2FA = async (req, res, next) => {
-//   try {
-//     const user = await User.findById(req.user.id);
-
-//     if (!user) {
-//       return res.status(HTTP_STATUS.NOT_FOUND).json({
-//         success: false,
-//         message: ERROR_MESSAGES.USER_NOT_FOUND,
-//       });
-//     }
-
-//     user.twoFactorEnabled = true;
-//     await user.save();
-
-//     res.json({
-//       success: true,
-//       message: '2FA enabled successfully',
-//     });
-//   } catch (error) {
-//     next(error);
-//   }
-// };
-
-/**
- * Disable 2FA - DISABLED (Using TOTP-based MFA instead)
- * POST /api/users/disable-2fa
- */
-// export const disable2FA = async (req, res, next) => {
-//   try {
-//     const user = await User.findById(req.user.id);
-
-//     if (!user) {
-//       return res.status(HTTP_STATUS.NOT_FOUND).json({
-//         success: false,
-//         message: ERROR_MESSAGES.USER_NOT_FOUND,
-//       });
-//     }
-
-//     user.twoFactorEnabled = false;
-//     user.twoFactorCode = undefined;
-//     user.twoFactorCodeExpires = undefined;
-//     await user.save();
-
-//     res.json({
-//       success: true,
-//       message: '2FA disabled successfully',
-//     });
-//   } catch (error) {
-//     next(error);
-//   }
-// };
-
-/**
- * Get user's order history
- * GET /api/users/orders
- */
-export const getUserOrders = async (req, res, next) => {
+export const verifyAndEnableTOTP = async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+    const { token } = req.body;
 
-    const query = { user: req.user.id };
-
-    if (req.query.status) {
-      query.status = req.query.status;
+    if (!token) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "TOTP token is required",
+      });
     }
 
-    const [orders, total] = await Promise.all([
-      Order.find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .populate("items.product", "name images"),
-      Order.countDocuments(query),
-    ]);
+    const user = await User.findById(req.user.id).select(
+      "+totpSecret +backupCodes",
+    );
+
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
+      });
+    }
+
+    if (!user.totpSecret) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Please setup TOTP first",
+      });
+    }
+
+    // Verify TOTP token
+    const isValid = verifyTOTPToken(token, user.totpSecret);
+
+    if (!isValid) {
+      await logAuthEvent(
+        "totp_verification_failed",
+        req,
+        user,
+        false,
+        "invalid_token",
+      );
+
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Invalid TOTP token",
+      });
+    }
+
+    // Generate backup codes
+    const backupCodes = generateBackupCodes(10);
+    const hashedBackupCodes = await Promise.all(
+      backupCodes.map((code) => hashBackupCode(code)),
+    );
+
+    // Enable TOTP
+    user.totpEnabled = true;
+    user.totpVerified = true;
+    user.backupCodes = hashedBackupCodes;
+    await user.save();
+
+    await logAuthEvent("totp_enabled", req, user, true);
+
+    res.json({
+      success: true,
+      message: "TOTP enabled successfully",
+      data: {
+        backupCodes, // Send unhashed codes only once
+        message:
+          "Save these backup codes in a safe place. They can be used if you lose access to your authenticator app.",
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Disable TOTP
+ * POST /api/totp/disable
+ */
+export const disableTOTP = async (req, res, next) => {
+  try {
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Password is required to disable TOTP",
+      });
+    }
+
+    const user = await User.findById(req.user.id).select(
+      "+password +totpSecret +backupCodes",
+    );
+
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
+      });
+    }
+
+    // Verify password
+    const bcrypt = (await import("bcrypt")).default;
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: "Invalid password",
+      });
+    }
+
+    // Disable TOTP
+    user.totpEnabled = false;
+    user.totpSecret = undefined;
+    user.totpVerified = false;
+    user.backupCodes = [];
+    await user.save();
+
+    await logAuthEvent("totp_disabled", req, user, true);
+
+    res.json({
+      success: true,
+      message: "TOTP disabled successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Regenerate backup codes
+ * POST /api/totp/regenerate-backup-codes
+ */
+export const regenerateBackupCodes = async (req, res, next) => {
+  try {
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Password is required",
+      });
+    }
+
+    const user = await User.findById(req.user.id).select(
+      "+password +backupCodes",
+    );
+
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
+      });
+    }
+
+    if (!user.totpEnabled) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "TOTP is not enabled",
+      });
+    }
+
+    // Verify password
+    const bcrypt = (await import("bcrypt")).default;
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: "Invalid password",
+      });
+    }
+
+    // Generate new backup codes
+    const backupCodes = generateBackupCodes(10);
+    const hashedBackupCodes = await Promise.all(
+      backupCodes.map((code) => hashBackupCode(code)),
+    );
+
+    user.backupCodes = hashedBackupCodes;
+    await user.save();
+
+    await logAuthEvent("backup_codes_regenerated", req, user, true);
+
+    res.json({
+      success: true,
+      message: "Backup codes regenerated successfully",
+      data: {
+        backupCodes,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get TOTP status
+ * GET /api/totp/status
+ */
+export const getTOTPStatus = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id).select("+backupCodes");
+
+    if (!user) {
+      return res.status(HTTP_STATUS.NOT_FOUND).json({
+        success: false,
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
+      });
+    }
 
     res.json({
       success: true,
       data: {
-        orders,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit),
+        totpEnabled: user.totpEnabled,
+        totpVerified: user.totpVerified,
+        backupCodesCount: user.backupCodes?.length || 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Verify TOTP during login
+ * POST /api/totp/verify-login
+ */
+export const verifyTOTPLogin = async (req, res, next) => {
+  try {
+    const { email, token, useBackupCode } = req.body;
+
+    if (!email || !token) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Email and token are required",
+      });
+    }
+
+    const user = await User.findOne({ email }).select(
+      "+totpSecret +backupCodes +refreshTokenHash",
+    );
+
+    if (!user) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: ERROR_MESSAGES.INVALID_CREDENTIALS,
+      });
+    }
+
+    if (!user.totpEnabled) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "TOTP is not enabled for this account",
+      });
+    }
+
+    let isValid = false;
+    let usedBackupCode = false;
+
+    if (useBackupCode) {
+      // Verify backup code
+      const result = await verifyBackupCode(token, user.backupCodes);
+      isValid = result.isValid;
+
+      if (isValid) {
+        // Remove used backup code
+        user.backupCodes.splice(result.codeIndex, 1);
+        usedBackupCode = true;
+      }
+    } else {
+      // Verify TOTP token
+      isValid = verifyTOTPToken(token, user.totpSecret);
+    }
+
+    if (!isValid) {
+      await logAuthEvent(
+        "totp_login_failed",
+        req,
+        user,
+        false,
+        "invalid_token",
+      );
+
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: useBackupCode ? "Invalid backup code" : "Invalid TOTP token",
+      });
+    }
+
+    // Generate tokens
+    const { hashPassword } = await import("../utils/encryption.js");
+    const { generateTokenPair } = await import("../services/token.service.js");
+    const { accessToken, refreshToken } = generateTokenPair(user);
+
+    // Store refresh token hash
+    user.refreshTokenHash = await hashPassword(refreshToken);
+    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    user.lastLogin = new Date();
+    await user.save();
+
+    await logAuthEvent("totp_login", req, user, true);
+
+    // Set cookies
+    const { securityConfig } = await import("../config/security.js");
+    res.cookie("accessToken", accessToken, {
+      ...securityConfig.cookie,
+      maxAge: 15 * 60 * 1000,
+    });
+
+    res.cookie("refreshToken", refreshToken, securityConfig.cookie);
+
+    res.json({
+      success: true,
+      message: SUCCESS_MESSAGES.LOGIN_SUCCESS,
+      data: {
+        user: {
+          id: user._id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          phone: user.phone,
+          profileImage: user.profileImage,
+          createdAt: user.createdAt,
+          role: user.role,
         },
+        accessToken,
+        usedBackupCode,
+        remainingBackupCodes: user.backupCodes.length,
       },
     });
   } catch (error) {
@@ -306,8 +397,10 @@ export const getUserOrders = async (req, res, next) => {
 };
 
 export default {
-  getProfile,
-  updateProfile,
-  changePassword,
-  getUserOrders,
+  setupTOTP,
+  verifyAndEnableTOTP,
+  disableTOTP,
+  regenerateBackupCodes,
+  getTOTPStatus,
+  verifyTOTPLogin,
 };

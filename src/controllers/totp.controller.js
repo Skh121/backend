@@ -13,6 +13,7 @@ import {
   SUCCESS_MESSAGES,
 } from "../utils/constants.js";
 import { logAuthEvent } from "../services/audit.service.js";
+import { createSession } from "../services/session.service.js";
 
 /**
  * Step 1: Generate TOTP secret and QR code
@@ -371,6 +372,20 @@ export const verifyTOTPLogin = async (req, res, next) => {
     });
 
     res.cookie("refreshToken", refreshToken, securityConfig.cookie);
+
+    // Create session for idle timeout tracking
+    const session = await createSession({
+      userId: user._id,
+      refreshTokenHash: user.refreshTokenHash,
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    res.cookie("sessionToken", session.sessionToken, {
+      ...securityConfig.cookie,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
     res.json({
       success: true,

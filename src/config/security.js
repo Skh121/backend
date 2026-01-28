@@ -3,6 +3,7 @@ export const securityConfig = {
   jwt: {
     accessTokenExpiry: "15m",
     refreshTokenExpiry: "7d",
+    sessionIdleTimeout: 15 * 60 * 1000, // 15 minutes idle timeout
     issuer: "shopping-platform",
     audience: "shopping-platform-users",
   },
@@ -15,7 +16,6 @@ export const securityConfig = {
     requireLowercase: true,
     requireNumbers: true,
     requireSpecialChars: true,
-    historyLimit: 5, // Remember last 5 passwords
     expiryDays: 90, // Password expires after 90 days
     expiryWarningDays: 14, // Warn user 14 days before expiry
   },
@@ -28,10 +28,10 @@ export const securityConfig = {
       message: "Too many requests from this IP, please try again later.",
     },
     auth: {
-      windowMs: 5 * 60 * 1000, // 5 minutes
-      max: 5, // 5 attempts allowed
+      windowMs: 15 * 60 * 1000, // 5 minutes
+      max: 10, // 10 attempts allowed (allows account lock message to show first)
       message:
-        "Too many authentication attempts, please try again after 5 mins.",
+        "Too many attempts from this IP, please try again after 15 mins.",
     },
     api: {
       windowMs: 5 * 60 * 1000,
@@ -42,7 +42,7 @@ export const securityConfig = {
   // Account Lockout Configuration
   lockout: {
     maxFailedAttempts: 5,
-    lockDuration: 30 * 60 * 1000, // 30 minutes
+    lockDuration: 5 * 60 * 1000, // 5 minutes
   },
 
   // 2FA Configuration

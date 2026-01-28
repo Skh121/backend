@@ -16,6 +16,7 @@ import {
   sendPasswordResetEmail,
 } from "../services/email.service.js";
 import { logAuthEvent, logFailedLogin } from "../services/audit.service.js";
+import { createSession } from "../services/session.service.js";
 import {
   HTTP_STATUS,
   ERROR_MESSAGES,
@@ -132,6 +133,20 @@ export const verifyEmail = async (req, res, next) => {
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+
+    // Create session for idle timeout tracking
+    const session = await createSession({
+      userId: user._id,
+      refreshTokenHash: await hashPassword(tokens.refreshToken),
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    res.cookie("sessionToken", session.sessionToken, {
+      ...securityConfig.cookie,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     res.json({
@@ -279,23 +294,6 @@ export const login = async (req, res, next) => {
       });
     }
 
-    // Email-based 2FA has been disabled - using TOTP only
-    // if (user.twoFactorEnabled) {
-    //   // Generate and send 2FA code
-    //   const twoFactorCode = generateOTP(securityConfig.twoFactor.codeLength);
-    //   user.twoFactorCode = twoFactorCode;
-    //   user.twoFactorCodeExpires = new Date(Date.now() + securityConfig.twoFactor.codeExpiry);
-    //   user.twoFactorVerified = false;
-    //   await user.save();
-
-    //   await send2FACode(email, twoFactorCode);
-
-    //   return res.json({
-    //     success: true,
-    //     message: '2FA code sent to your email',
-    //     requires2FA: true,
-    //   });
-    // }
 
     // Generate tokens
     const { accessToken, refreshToken } = generateTokenPair(user);
@@ -324,6 +322,20 @@ export const login = async (req, res, next) => {
     });
 
     res.cookie("refreshToken", refreshToken, securityConfig.cookie);
+
+    // Create session for idle timeout tracking
+    const session = await createSession({
+      userId: user._id,
+      refreshTokenHash: user.refreshTokenHash,
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    res.cookie("sessionToken", session.sessionToken, {
+      ...securityConfig.cookie,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
     res.json({
       success: true,
@@ -422,6 +434,20 @@ export const verify2FA = async (req, res, next) => {
 
     res.cookie("refreshToken", refreshToken, securityConfig.cookie);
 
+    // Create session for idle timeout tracking
+    const session = await createSession({
+      userId: user._id,
+      refreshTokenHash: user.refreshTokenHash,
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    res.cookie("sessionToken", session.sessionToken, {
+      ...securityConfig.cookie,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
     res.json({
       success: true,
       message: SUCCESS_MESSAGES.LOGIN_SUCCESS,
@@ -508,6 +534,14 @@ export const refreshAccessToken = async (req, res, next) => {
 
     res.cookie("refreshToken", newRefreshToken, securityConfig.cookie);
 
+    // Update session activity if sessionToken exists
+    const sessionToken = req.cookies?.sessionToken;
+    if (sessionToken) {
+      import("../services/session.service.js").then(({ updateSessionActivity }) => {
+        updateSessionActivity(sessionToken);
+      });
+    }
+
     res.json({
       success: true,
       message: "Token refreshed successfully",
@@ -538,10 +572,52 @@ export const logout = async (req, res, next) => {
     // Clear cookies
     res.clearCookie("accessToken");
     res.clearCookie("refreshToken");
+    res.clearCookie("sessionToken");
+
+    // Revoke session on server if sessionToken exists
+    const sessionToken = req.cookies?.sessionToken;
+    if (sessionToken) {
+      import("../services/session.service.js").then(({ revokeSession }) => {
+        revokeSession(sessionToken);
+      });
+    }
 
     res.json({
       success: true,
       message: SUCCESS_MESSAGES.LOGOUT_SUCCESS,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Logout from all devices
+ * POST /api/auth/logout-all
+ */
+export const logoutAllDevices = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    // 1. Revoke all active sessions for this user in the database
+    const { default: Session } = await import("../models/Session.js");
+    await Session.revokeAllSessions(userId);
+
+    // 2. Clear refresh token hash on the user model to invalidate all refresh tokens
+    await User.findByIdAndUpdate(userId, {
+      $unset: { refreshTokenHash: 1, refreshTokenExpires: 1 },
+    });
+
+    // 3. Clear cookies on the current response
+    res.clearCookie("accessToken");
+    res.clearCookie("refreshToken");
+    res.clearCookie("sessionToken");
+
+    logAuthEvent("logout_all", req, req.user, true);
+
+    res.json({
+      success: true,
+      message: "Successfully logged out from all devices.",
     });
   } catch (error) {
     next(error);
@@ -599,9 +675,7 @@ export const resetPassword = async (req, res, next) => {
     const user = await User.findOne({
       passwordResetToken: token,
       passwordResetExpires: { $gt: Date.now() },
-    }).select(
-      "+passwordResetToken +passwordResetExpires +password +passwordHistory",
-    );
+    }).select("+passwordResetToken +passwordResetExpires +password");
 
     if (!user) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -610,19 +684,15 @@ export const resetPassword = async (req, res, next) => {
       });
     }
 
-    // Check if password is in history
+    // Check if password is same as current
     const isPasswordReused = await user.isPasswordInHistory(password);
     if (isPasswordReused) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: `Cannot reuse your last ${securityConfig.password.historyLimit} passwords`,
+        message: "New password cannot be the same as your current password",
       });
     }
 
-    // Add current password to history before changing
-    if (user.password) {
-      await user.addToPasswordHistory(user.password);
-    }
 
     // Hash new password
     user.password = await hashPassword(password);
@@ -683,6 +753,7 @@ export default {
   verify2FA,
   refreshAccessToken,
   logout,
+  logoutAllDevices,
   forgotPassword,
   resetPassword,
   getCurrentUser,

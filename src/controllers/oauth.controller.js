@@ -4,6 +4,7 @@ import { generateTokenPair } from '../services/token.service.js';
 import { logAuthEvent } from '../services/audit.service.js';
 import { HTTP_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../utils/constants.js';
 import { securityConfig } from '../config/security.js';
+import { createSession } from '../services/session.service.js';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -106,8 +107,12 @@ export const googleAuth = async (req, res, next) => {
     }
 
     // Generate tokens
-    const { accessToken, refreshToken, refreshTokenHash, refreshTokenExpires } =
-      await generateTokenPair(user);
+    const { accessToken, refreshToken } = generateTokenPair(user);
+
+    // Hash new refresh token
+    const { hashPassword } = await import('../utils/encryption.js');
+    const refreshTokenHash = await hashPassword(refreshToken);
+    const refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     // Update user with refresh token
     user.refreshTokenHash = refreshTokenHash;
@@ -130,6 +135,20 @@ export const googleAuth = async (req, res, next) => {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+
+    // Create session for idle timeout tracking
+    const session = await createSession({
+      userId: user._id,
+      refreshTokenHash: user.refreshTokenHash,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    res.cookie('sessionToken', session.sessionToken, {
+      ...securityConfig.cookie,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     logAuthEvent('login_google', req, user, true, 'User logged in via Google OAuth');

@@ -1,8 +1,9 @@
 import { verifyAccessToken } from "../services/token.service.js";
-import { HTTP_STATUS, ERROR_MESSAGES, USER_ROLES } from "../utils/constants.js";
-import { logger } from "../utils/logger.js";
+import { HTTP_STATUS, ERROR_MESSAGES, USER_ROLES, SUCCESS_MESSAGES } from "../utils/constants.js";
 import User from "../models/User.js";
 import { securityConfig } from "../config/security.js";
+import { logger } from "../utils/logger.js";
+import Session from "../models/Session.js";
 
 /**
  * Authentication middleware - verifies JWT access token
@@ -26,11 +27,54 @@ export const authenticate = async (req, res, next) => {
     // Verify token
     const decoded = verifyAccessToken(token);
 
+    // Idle Session Check
+    const sessionToken = req.cookies?.sessionToken;
+    if (!sessionToken) {
+      // If session tracking is enabled but token is missing, treat as unauthorized
+      // (This ensures consistency once we start enforcing it)
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: "Session token missing. Please log in again.",
+      });
+    }
+
+    const session = await Session.findOne({ sessionToken, isActive: true });
+    if (!session) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: "Invalid or expired session. Please log in again.",
+      });
+    }
+
+    // Check for idle timeout
+    const now = new Date();
+    const idleTime = now - session.lastActivity;
+
+    if (idleTime > securityConfig.jwt.sessionIdleTimeout) {
+      session.isActive = false;
+      await session.save();
+
+      // Clear cookies
+      res.clearCookie("accessToken");
+      res.clearCookie("refreshToken");
+      res.clearCookie("sessionToken");
+
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        message: "Session expired due to inactivity. Please log in again.",
+        code: "SESSION_IDLE_TIMEOUT",
+      });
+    }
+
+    // Update last activity
+    await session.updateActivity();
+
     // Attach user info to request
     req.user = {
       id: decoded.id,
       email: decoded.email,
       role: decoded.role,
+      sessionToken: sessionToken, // Useful for logout
     };
 
     next();

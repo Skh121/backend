@@ -5,6 +5,7 @@ import {
   decryptField,
   isEncrypted,
 } from "../utils/encryption.js";
+import { securityConfig } from "../config/security.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -138,12 +139,6 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Password security
-    passwordHistory: {
-      type: [String],
-      default: [],
-      select: false, // Don't return password history by default
-    },
     passwordChangedAt: {
       type: Date,
       default: null,
@@ -211,9 +206,9 @@ userSchema.methods.incrementLoginAttempts = async function () {
   } else {
     this.failedLoginAttempts += 1;
 
-    // Lock account after 5 failed attempts
-    if (this.failedLoginAttempts >= 5) {
-      this.accountLockedUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+    // Lock account after max failed attempts
+    if (this.failedLoginAttempts >= securityConfig.lockout.maxFailedAttempts) {
+      this.accountLockedUntil = new Date(Date.now() + securityConfig.lockout.lockDuration);
     }
   }
 
@@ -227,41 +222,17 @@ userSchema.methods.resetLoginAttempts = async function () {
   await this.save();
 };
 
-// Method to check if password is in history (last 5 passwords)
+// Method to check if password is the same as current password
 userSchema.methods.isPasswordInHistory = async function (newPassword) {
-  if (!this.passwordHistory || this.passwordHistory.length === 0) {
+  if (!this.password) {
     return false;
   }
 
   // Import bcrypt dynamically to avoid circular dependency
   const bcrypt = (await import("bcrypt")).default;
 
-  // Check against all passwords in history
-  for (const hashedPassword of this.passwordHistory) {
-    const isMatch = await bcrypt.compare(newPassword, hashedPassword);
-    if (isMatch) {
-      return true;
-    }
-  }
-
-  return false;
-};
-
-// Method to add current password to history
-userSchema.methods.addToPasswordHistory = async function (
-  currentHashedPassword,
-) {
-  if (!this.passwordHistory) {
-    this.passwordHistory = [];
-  }
-
-  // Add current password to history
-  this.passwordHistory.unshift(currentHashedPassword);
-
-  // Keep only last 5 passwords
-  if (this.passwordHistory.length > 5) {
-    this.passwordHistory = this.passwordHistory.slice(0, 5);
-  }
+  // Check if new password matches current hashed password
+  return await bcrypt.compare(newPassword, this.password);
 };
 
 // Method to check if password is expired

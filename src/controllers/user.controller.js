@@ -139,9 +139,7 @@ export const changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
-    const user = await User.findById(req.user.id).select(
-      "+password +passwordHistory",
-    );
+    const user = await User.findById(req.user.id).select("+password");
 
     if (!user) {
       return res.status(HTTP_STATUS.NOT_FOUND).json({
@@ -163,19 +161,15 @@ export const changePassword = async (req, res, next) => {
       });
     }
 
-    // Check if new password is in history
+    // Check if new password is same as current
     const isPasswordReused = await user.isPasswordInHistory(newPassword);
     if (isPasswordReused) {
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: `Cannot reuse your last ${securityConfig.password.historyLimit} passwords`,
+        message: "New password cannot be the same as your current password",
       });
     }
 
-    // Add current password to history before changing
-    if (user.password) {
-      await user.addToPasswordHistory(user.password);
-    }
 
     // Hash and update new password
     user.password = await hashPassword(newPassword);

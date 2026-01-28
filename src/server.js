@@ -15,7 +15,7 @@ import { securityConfig } from "./config/security.js";
 
 // Import middleware
 import { helmetConfig } from "./middleware/helmet.js";
-import { globalRateLimiter } from "./middleware/rateLimiter.js";
+import { globalRateLimiter, checkIPBlocked } from "./middleware/rateLimiter.js";
 import { sanitizeInput } from "./middleware/sanitize.js";
 import {
   generateCSRFToken,
@@ -70,6 +70,7 @@ app.use((req, res, next) => {
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Rate limiting (must be after trust proxy)
+app.use(checkIPBlocked);
 app.use(globalRateLimiter);
 
 // Input sanitization (prevent NoSQL injection and XSS)
@@ -89,6 +90,9 @@ app.use(
   },
   express.static(path.join(__dirname, "../uploads")),
 );
+
+// Serve public files (like placeholder.png)
+app.use(express.static(path.join(__dirname, "../public")));
 
 // CSRF protection
 app.use(generateCSRFToken);
@@ -136,6 +140,7 @@ app.use(errorHandler);
 
 // Initialize database and start server
 const startServer = async () => {
+  const PORT = process.env.PORT || 5000;
   try {
     // Connect to MongoDB
     await connectDatabase();

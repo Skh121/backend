@@ -51,8 +51,8 @@ export const HTTP_STATUS = {
 
 export const ERROR_MESSAGES = {
   // Authentication
-  INVALID_CREDENTIALS: "Invalid email or password",
-  ACCOUNT_LOCKED: "Account locked due to multiple failed login attempts",
+  INVALID_CREDENTIALS: "Invalid Credentials",
+  ACCOUNT_LOCKED: "Too many attempts account locked for 5 minutes",
   EMAIL_NOT_VERIFIED: "Please verify your email before logging in",
   INVALID_TOKEN: "Invalid or expired token",
   UNAUTHORIZED: "Authentication required",
@@ -80,7 +80,8 @@ export const ERROR_MESSAGES = {
   // General
   VALIDATION_ERROR: "Validation error",
   SERVER_ERROR: "Internal server error",
-  RATE_LIMIT_EXCEEDED: "Too many requests",
+  RATE_LIMIT_EXCEEDED: "Too many requests from this IP, please try again later",
+  IP_BLOCKED: "This IP address has been temporarily blocked due to suspicious activity",
   CAPTCHA_FAILED: "CAPTCHA verification failed",
   CSRF_INVALID: "Invalid CSRF token",
 };

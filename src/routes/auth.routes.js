@@ -6,6 +6,7 @@ import {
   verify2FA,
   refreshAccessToken,
   logout,
+  logoutAllDevices,
   forgotPassword,
   resetPassword,
   getCurrentUser,
@@ -82,6 +83,7 @@ router.post(
 
 // Protected routes
 router.post("/logout", authenticate, asyncHandler(logout));
+router.post("/logout-all", authenticate, asyncHandler(logoutAllDevices));
 
 router.get("/me", authenticate, asyncHandler(getCurrentUser));
 

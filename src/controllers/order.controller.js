@@ -185,7 +185,7 @@ export const getOrderById = async (req, res, next) => {
       });
     }
 
-    // Ensure user can only access their own orders (unless admin)
+    // Authorization check: Users can only access their own orders, admins can access any
     if (order.user.toString() !== req.user.id && req.user.role !== "admin") {
       return res.status(HTTP_STATUS.FORBIDDEN).json({
         success: false,
